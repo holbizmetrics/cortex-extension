@@ -1,4 +1,4 @@
-// entrypoints/content.ts
+// entrypoints/content.ts - Day 3: PRETTIER
 
 import { db } from '@/lib/db';
 import { scraper } from '@/lib/scraper';
@@ -9,20 +9,13 @@ export default defineContentScript({
   async main() {
     console.log('🧠 Cortex: Initializing...');
 
-    // Initialize database
     await db.init();
-
-    // Wait for page to be ready
     await waitForPageLoad();
 
-    // Create and inject sidebar
     const sidebar = createSidebar();
     document.body.appendChild(sidebar);
 
-    // Shift main content
     shiftMainContent();
-
-    // Load and display conversations
     await loadConversations();
 
     console.log('🧠 Cortex: Ready');
@@ -43,64 +36,116 @@ function createSidebar(): HTMLElement {
   const sidebar = document.createElement('div');
   sidebar.id = 'cortex-sidebar';
   sidebar.innerHTML = `
+    <style>
+      #cortex-sidebar * {
+        box-sizing: border-box;
+      }
+      
+      .cortex-conversation-card {
+        transition: all 0.2s ease;
+      }
+      
+      .cortex-conversation-card:hover {
+        transform: translateX(4px);
+        background: rgba(255,255,255,0.12) !important;
+      }
+      
+      .cortex-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 10px;
+        font-weight: 600;
+      }
+      
+      .cortex-skeleton {
+        background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);
+        background-size: 200% 100%;
+        animation: cortex-loading 1.5s infinite;
+      }
+      
+      @keyframes cortex-loading {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+      }
+    </style>
+    
     <div style="
       position: fixed;
       left: 0;
       top: 0;
-      width: 280px;
+      width: 320px;
       height: 100vh;
       background: linear-gradient(180deg, #2c3e50 0%, #34495e 100%);
       z-index: 9999;
       display: flex;
       flex-direction: column;
-      box-shadow: 2px 0 12px rgba(0,0,0,0.15);
+      box-shadow: 2px 0 20px rgba(0,0,0,0.3);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     ">
       <!-- Header -->
-      <div style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-        <h1 style="margin: 0 0 8px 0; font-size: 20px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
+      <div style="padding: 24px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <h1 style="
+          margin: 0 0 6px 0; 
+          font-size: 22px; 
+          font-weight: 700; 
+          color: #fff; 
+          display: flex; 
+          align-items: center; 
+          gap: 10px;
+          letter-spacing: -0.5px;
+        ">
           🧠 Cortex
         </h1>
-        <p style="margin: 0; font-size: 12px; color: #95a5a6;">
+        <p style="margin: 0; font-size: 12px; color: #95a5a6; font-weight: 500;">
           The brain for your AI conversations
         </p>
       </div>
 
       <!-- Search Bar -->
-      <div style="padding: 16px;">
-        <input 
-          id="cortex-search"
-          type="text" 
-          placeholder="🔍 Search conversations..." 
-          style="
-            width: 100%; 
-            padding: 10px 12px; 
-            border: none; 
-            border-radius: 8px;
-            background: rgba(255,255,255,0.1); 
-            color: #fff; 
-            font-size: 13px;
-            outline: none; 
-            box-sizing: border-box;
-          "
-        />
+      <div style="padding: 16px 20px;">
+        <div style="position: relative;">
+          <input 
+            id="cortex-search"
+            type="text" 
+            placeholder="🔍 Search conversations..." 
+            style="
+              width: 100%; 
+              padding: 12px 14px; 
+              border: none; 
+              border-radius: 10px;
+              background: rgba(255,255,255,0.08); 
+              color: #fff; 
+              font-size: 13px;
+              outline: none; 
+              transition: all 0.2s;
+            "
+            onfocus="this.style.background='rgba(255,255,255,0.12)'"
+            onblur="this.style.background='rgba(255,255,255,0.08)'"
+          />
+        </div>
       </div>
 
       <!-- Action Buttons -->
-      <div style="padding: 0 16px 16px 16px; display: flex; gap: 8px;">
+      <div style="padding: 0 20px 16px 20px; display: flex; gap: 10px;">
         <button 
           id="cortex-refresh"
           style="
             flex: 1;
-            padding: 8px 12px;
-            background: rgba(52, 152, 219, 0.2);
-            border: 1px solid rgba(52, 152, 219, 0.3);
-            border-radius: 6px;
+            padding: 10px 14px;
+            background: linear-gradient(135deg, rgba(52, 152, 219, 0.2) 0%, rgba(41, 128, 185, 0.2) 100%);
+            border: 1px solid rgba(52, 152, 219, 0.4);
+            border-radius: 8px;
             color: #3498db;
             font-size: 12px;
             font-weight: 600;
             cursor: pointer;
+            transition: all 0.2s;
           "
+          onmouseover="this.style.background='linear-gradient(135deg, rgba(52, 152, 219, 0.3) 0%, rgba(41, 128, 185, 0.3) 100%)'; this.style.transform='scale(1.02)'"
+          onmouseout="this.style.background='linear-gradient(135deg, rgba(52, 152, 219, 0.2) 0%, rgba(41, 128, 185, 0.2) 100%)'; this.style.transform='scale(1)'"
         >
           🔄 Refresh
         </button>
@@ -108,53 +153,56 @@ function createSidebar(): HTMLElement {
           id="cortex-clear"
           style="
             flex: 1;
-            padding: 8px 12px;
-            background: rgba(231, 76, 60, 0.1);
+            padding: 10px 14px;
+            background: linear-gradient(135deg, rgba(231, 76, 60, 0.15) 0%, rgba(192, 57, 43, 0.15) 100%);
             border: 1px solid rgba(231, 76, 60, 0.3);
-            border-radius: 6px;
+            border-radius: 8px;
             color: #e74c3c;
             font-size: 12px;
             font-weight: 600;
             cursor: pointer;
+            transition: all 0.2s;
           "
+          onmouseover="this.style.background='linear-gradient(135deg, rgba(231, 76, 60, 0.25) 0%, rgba(192, 57, 43, 0.25) 100%)'; this.style.transform='scale(1.02)'"
+          onmouseout="this.style.background='linear-gradient(135deg, rgba(231, 76, 60, 0.15) 0%, rgba(192, 57, 43, 0.15) 100%)'; this.style.transform='scale(1)'"
         >
           🗑️ Clear
         </button>
       </div>
 
       <!-- Conversation List -->
-      <div id="cortex-conversations" style="padding: 0 16px; flex: 1; overflow-y: auto;">
-        <div style="
-          padding: 20px;
-          text-align: center;
-          color: #95a5a6;
-          font-size: 13px;
-        ">
+      <div id="cortex-conversations" style="
+        padding: 0 20px; 
+        flex: 1; 
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255,255,255,0.2) transparent;
+      ">
+        <div style="padding: 40px 20px; text-align: center; color: #95a5a6; font-size: 13px;">
           Loading conversations...
         </div>
       </div>
 
       <!-- Footer -->
-      <div style="padding: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+      <div style="padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.1);">
         <div id="cortex-status" style="
-          padding: 8px 12px;
-          background: rgba(46, 204, 113, 0.1);
-          border-radius: 6px;
+          padding: 10px 14px;
+          background: linear-gradient(135deg, rgba(46, 204, 113, 0.15) 0%, rgba(39, 174, 96, 0.15) 100%);
+          border-radius: 8px;
           border: 1px solid rgba(46, 204, 113, 0.3);
-          margin-bottom: 8px;
+          margin-bottom: 10px;
         ">
-          <div style="color: #2ecc71; font-size: 11px; font-weight: 600;">
-            ✅ DAY 2: SCRAPING ACTIVE
+          <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
+            ✅ DAY 3: PRETTIER MODE
           </div>
         </div>
-        <div style="color: #95a5a6; font-size: 11px; text-align: center;">
-          v0.2.0 • Building in Public
+        <div style="color: #7f8c8d; font-size: 10px; text-align: center; font-weight: 500;">
+          v0.3.0 • Building in Public
         </div>
       </div>
     </div>
   `;
 
-  // Add event listeners
   setTimeout(() => {
     const refreshBtn = document.getElementById('cortex-refresh');
     const clearBtn = document.getElementById('cortex-clear');
@@ -183,7 +231,7 @@ function createSidebar(): HTMLElement {
 function shiftMainContent(): void {
   const mainContent = document.querySelector('main, [class*="main"]');
   if (mainContent instanceof HTMLElement) {
-    mainContent.style.marginLeft = '280px';
+    mainContent.style.marginLeft = '320px';
     mainContent.style.transition = 'margin-left 0.3s ease';
   }
 }
@@ -192,39 +240,34 @@ async function loadConversations(): Promise<void> {
   const container = document.getElementById('cortex-conversations');
   if (!container) return;
 
-  // Show loading state
-  container.innerHTML = `
-    <div style="padding: 20px; text-align: center; color: #95a5a6; font-size: 13px;">
-      🔄 Scraping conversations...
-    </div>
-  `;
+  // Show loading skeleton
+  container.innerHTML = Array(5).fill(0).map(() => `
+    <div class="cortex-skeleton" style="
+      padding: 16px;
+      margin-bottom: 10px;
+      border-radius: 12px;
+      height: 90px;
+    "></div>
+  `).join('');
 
   try {
-    // Scrape conversations from DOM
     const scrapedConversations = await scraper.scrapeConversationList();
     
-    // Save to database
     if (scrapedConversations.length > 0) {
       await db.saveConversations(scrapedConversations);
     }
 
-    // Load all conversations from database
     const conversations = await db.getAllConversations();
-
-    // Sort by updated date (most recent first)
     conversations.sort((a, b) => 
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     );
 
-    // Display conversations
     displayConversations(conversations);
-
-    // Update status
     updateStatus(conversations.length);
   } catch (error) {
     console.error('Failed to load conversations:', error);
     container.innerHTML = `
-      <div style="padding: 20px; text-align: center; color: #e74c3c; font-size: 13px;">
+      <div style="padding: 40px 20px; text-align: center; color: #e74c3c; font-size: 13px;">
         ⚠️ Failed to load conversations
       </div>
     `;
@@ -237,67 +280,96 @@ function displayConversations(conversations: Conversation[]): void {
 
   if (conversations.length === 0) {
     container.innerHTML = `
-      <div style="padding: 20px; text-align: center; color: #95a5a6; font-size: 13px;">
+      <div style="padding: 40px 20px; text-align: center; color: #95a5a6; font-size: 13px;">
         No conversations found
       </div>
     `;
     return;
   }
 
-  container.innerHTML = conversations.map(conv => `
+  container.innerHTML = conversations.map(conv => {
+    const platformEmoji = conv.platform === 'claude' ? '🤖' : '💬';
+    const messageCountDisplay = conv.messageCount > 0 ? conv.messageCount : '?';
+    
+    return `
     <div 
       class="cortex-conversation-card" 
       data-id="${conv.id}"
       style="
-        padding: 12px;
-        margin-bottom: 8px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+        background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.03) 100%);
+        border-radius: 12px;
         cursor: pointer;
-        transition: background 0.2s;
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       "
-      onmouseover="this.style.background='rgba(255,255,255,0.1)'"
-      onmouseout="this.style.background='rgba(255,255,255,0.05)'"
     >
+      <!-- Header Row -->
       <div style="
         display: flex;
         justify-content: space-between;
         align-items: start;
-        margin-bottom: 4px;
+        margin-bottom: 8px;
+        gap: 8px;
       ">
         <div style="
           color: #ecf0f1;
           font-size: 13px;
-          font-weight: 500;
+          font-weight: 600;
           flex: 1;
+          line-height: 1.4;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
           overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
         ">
-          ${conv.title}
+          ${platformEmoji} ${conv.title}
         </div>
-        ${conv.isStarred ? '<span style="color: #f39c12;">⭐</span>' : ''}
+        ${conv.isStarred ? '<span style="font-size: 14px;">⭐</span>' : ''}
       </div>
+
+      <!-- Preview Text -->
       ${conv.preview ? `
         <div style="
           color: #95a5a6;
-          font-size: 11px;
+          font-size: 12px;
+          line-height: 1.5;
+          margin-bottom: 8px;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
           overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
         ">
           ${conv.preview}
         </div>
       ` : ''}
+
+      <!-- Footer Row -->
       <div style="
-        color: #7f8c8d;
-        font-size: 10px;
-        margin-top: 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
       ">
-        ${formatTimestamp(conv.updatedAt)}
+        <div style="
+          color: #7f8c8d;
+          font-size: 10px;
+          font-weight: 500;
+        ">
+          ${formatTimestamp(conv.updatedAt)}
+        </div>
+        
+        <div class="cortex-badge" style="
+          background: rgba(52, 152, 219, 0.15);
+          color: #3498db;
+          border: 1px solid rgba(52, 152, 219, 0.3);
+        ">
+          ${messageCountDisplay} msg${messageCountDisplay !== '1' ? 's' : ''}
+        </div>
       </div>
     </div>
-  `).join('');
+  `}).join('');
 }
 
 function filterConversations(query: string): void {
@@ -313,7 +385,7 @@ function updateStatus(count: number): void {
   const statusDiv = document.getElementById('cortex-status');
   if (statusDiv) {
     statusDiv.innerHTML = `
-      <div style="color: #2ecc71; font-size: 11px; font-weight: 600;">
+      <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
         ✅ ${count} CONVERSATIONS LOADED
       </div>
     `;
@@ -334,7 +406,7 @@ function formatTimestamp(timestamp: string): string {
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
     
-    return date.toLocaleDateString();
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   } catch {
     return 'Unknown';
   }

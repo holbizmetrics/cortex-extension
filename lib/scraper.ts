@@ -5,39 +5,34 @@ import type { Conversation } from '@/types/conversation';
 export class ClaudeScraper {
   /**
    * Scrape conversation list from Claude.ai sidebar
-   * Note: DOM selectors may need adjustment as Claude updates their UI
    */
   async scrapeConversationList(): Promise<Conversation[]> {
     const conversations: Conversation[] = [];
 
-    // Wait for sidebar to load
     await this.waitForElement('[data-testid="conversation-list"]', 5000)
       .catch(() => console.log('Conversation list not found, trying alternative selectors'));
 
-    // Try multiple selector strategies (Claude's DOM changes frequently)
     const conversationElements = this.findConversationElements();
 
-    conversationElements.forEach((element, index) => {
+    for (let i = 0; i < conversationElements.length; i++) {
       try {
-        const conversation = this.parseConversationElement(element, index);
+        const conversation = await this.parseConversationElement(conversationElements[i], i);
         if (conversation) {
           conversations.push(conversation);
         }
       } catch (error) {
         console.error('Failed to parse conversation element:', error);
       }
-    });
+    }
 
     console.log(`🧠 Cortex: Scraped ${conversations.length} conversations`);
     return conversations;
   }
 
   private findConversationElements(): Element[] {
-    // Strategy 1: Look for common conversation item patterns
     let elements = Array.from(document.querySelectorAll('[data-testid*="conversation"]'));
     
     if (elements.length === 0) {
-      // Strategy 2: Look for links in sidebar that contain chat history
       const sidebar = document.querySelector('nav, aside, [class*="sidebar"]');
       if (sidebar) {
         elements = Array.from(sidebar.querySelectorAll('a[href*="/chat/"]'));
@@ -45,15 +40,13 @@ export class ClaudeScraper {
     }
 
     if (elements.length === 0) {
-      // Strategy 3: Look for any links with href containing conversation IDs
       elements = Array.from(document.querySelectorAll('a[href*="conversation"]'));
     }
 
     return elements;
   }
 
-  private parseConversationElement(element: Element, fallbackIndex: number): Conversation | null {
-    // Extract conversation ID from href
+  private async parseConversationElement(element: Element, fallbackIndex: number): Promise<Conversation | null> {
     const href = element.getAttribute('href');
     const id = this.extractConversationId(href) || `conv-${Date.now()}-${fallbackIndex}`;
 
@@ -63,38 +56,80 @@ export class ClaudeScraper {
                   element.textContent?.trim().substring(0, 50) || 
                   'Untitled Conversation';
 
-    // Extract timestamp (if available)
+    // Extract timestamp
     const timeElement = element.querySelector('time, [class*="time"], [class*="date"]');
     const timestamp = timeElement?.getAttribute('datetime') || 
                      timeElement?.textContent || 
                      new Date().toISOString();
 
-    // Extract preview text
-    const previewElement = element.querySelector('[class*="preview"], p');
-    const preview = previewElement?.textContent?.trim().substring(0, 100);
+    // Extract preview text - try multiple strategies
+    let preview = '';
+    
+    // Strategy 1: Look for preview/subtitle element
+    const previewElement = element.querySelector('[class*="preview"], [class*="subtitle"], p');
+    if (previewElement) {
+      preview = previewElement.textContent?.trim().substring(0, 100) || '';
+    }
+    
+    // Strategy 2: If no preview, try to get from message content
+    if (!preview) {
+      const messageElements = element.querySelectorAll('[class*="message"], [class*="content"]');
+      if (messageElements.length > 0) {
+        preview = messageElements[0].textContent?.trim().substring(0, 100) || '';
+      }
+    }
+
+    // Strategy 3: Get first text content that's not the title
+    if (!preview) {
+      const allText = element.textContent?.trim() || '';
+      const titleText = title.trim();
+      preview = allText
+        .replace(titleText, '')
+        .replace(/\n+/g, ' ')
+        .trim()
+        .substring(0, 100);
+    }
+
+    // Estimate message count (will be more accurate when we scrape full conversations)
+    const messageCount = this.estimateMessageCount(element);
 
     return {
       id,
       platform: 'claude',
       title,
-      preview,
+      preview: preview || undefined,
       createdAt: timestamp,
       updatedAt: timestamp,
-      messageCount: 0, // Will be updated when we scrape individual conversations
+      messageCount,
       tags: [],
       isStarred: false,
       isArchived: false
     };
   }
 
+  private estimateMessageCount(element: Element): number {
+    // Try to find message count badge
+    const badge = element.querySelector('[class*="badge"], [class*="count"]');
+    if (badge) {
+      const count = parseInt(badge.textContent || '0', 10);
+      if (!isNaN(count)) return count;
+    }
+
+    // Estimate based on visible message elements
+    const messages = element.querySelectorAll('[class*="message"]');
+    if (messages.length > 0) return messages.length;
+
+    // Default estimate
+    return 0;
+  }
+
   private extractConversationId(href: string | null): string | null {
     if (!href) return null;
 
-    // Extract UUID or ID from href
     const patterns = [
-      /chat\/([a-f0-9-]{36})/i,           // UUID format
-      /conversation\/([a-zA-Z0-9-_]+)/,   // Generic ID
-      /\/([a-zA-Z0-9-_]{20,})/            // Long alphanumeric ID
+      /chat\/([a-f0-9-]{36})/i,
+      /conversation\/([a-zA-Z0-9-_]+)/,
+      /\/([a-zA-Z0-9-_]{20,})/
     ];
 
     for (const pattern of patterns) {
@@ -133,9 +168,6 @@ export class ClaudeScraper {
     });
   }
 
-  /**
-   * Get the current conversation ID from the URL
-   */
   getCurrentConversationId(): string | null {
     return this.extractConversationId(window.location.href);
   }
