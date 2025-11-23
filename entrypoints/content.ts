@@ -1,8 +1,12 @@
-// entrypoints/content.ts - Day 3: PRETTIER
+// entrypoints/content.ts - Day 4: SMARTER (Pro Tier)
 
 import { db } from '@/lib/db';
 import { scraper } from '@/lib/scraper';
+import { smartTagger } from '@/lib/smart-tags';
 import type { Conversation } from '@/types/conversation';
+
+let allConversations: Conversation[] = [];
+let selectedTag: string | null = null;
 
 export default defineContentScript({
   matches: ['*://claude.ai/*'],
@@ -60,6 +64,29 @@ function createSidebar(): HTMLElement {
         font-weight: 600;
       }
       
+      .cortex-tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 600;
+        margin-right: 4px;
+        margin-bottom: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      
+      .cortex-tag:hover {
+        transform: scale(1.05);
+        filter: brightness(1.2);
+      }
+      
+      .cortex-tag.active {
+        box-shadow: 0 0 0 2px rgba(255,255,255,0.3);
+        transform: scale(1.1);
+      }
+      
       .cortex-skeleton {
         background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);
         background-size: 200% 100%;
@@ -69,6 +96,23 @@ function createSidebar(): HTMLElement {
       @keyframes cortex-loading {
         0% { background-position: 200% 0; }
         100% { background-position: -200% 0; }
+      }
+      
+      #cortex-conversations::-webkit-scrollbar {
+        width: 6px;
+      }
+      
+      #cortex-conversations::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      
+      #cortex-conversations::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.2);
+        border-radius: 3px;
+      }
+      
+      #cortex-conversations::-webkit-scrollbar-thumb:hover {
+        background: rgba(255,255,255,0.3);
       }
     </style>
     
@@ -86,7 +130,7 @@ function createSidebar(): HTMLElement {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     ">
       <!-- Header -->
-      <div style="padding: 24px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+      <div style="padding: 24px 20px 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
         <h1 style="
           margin: 0 0 6px 0; 
           font-size: 22px; 
@@ -98,19 +142,27 @@ function createSidebar(): HTMLElement {
           letter-spacing: -0.5px;
         ">
           🧠 Cortex
+          <span style="
+            font-size: 10px;
+            padding: 2px 6px;
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            border-radius: 6px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+          ">PRO</span>
         </h1>
         <p style="margin: 0; font-size: 12px; color: #95a5a6; font-weight: 500;">
-          The brain for your AI conversations
+          Smart tagging & advanced search
         </p>
       </div>
 
       <!-- Search Bar -->
-      <div style="padding: 16px 20px;">
+      <div style="padding: 16px 20px 12px 20px;">
         <div style="position: relative;">
           <input 
             id="cortex-search"
             type="text" 
-            placeholder="🔍 Search conversations..." 
+            placeholder="🔍 Fuzzy search..." 
             style="
               width: 100%; 
               padding: 12px 14px; 
@@ -128,18 +180,28 @@ function createSidebar(): HTMLElement {
         </div>
       </div>
 
+      <!-- Tag Filter -->
+      <div id="cortex-tag-filter" style="
+        padding: 0 20px 12px 20px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      ">
+        <!-- Tags will be inserted here -->
+      </div>
+
       <!-- Action Buttons -->
-      <div style="padding: 0 20px 16px 20px; display: flex; gap: 10px;">
+      <div style="padding: 0 20px 16px 20px; display: flex; gap: 8px;">
         <button 
           id="cortex-refresh"
           style="
             flex: 1;
-            padding: 10px 14px;
+            padding: 10px 12px;
             background: linear-gradient(135deg, rgba(52, 152, 219, 0.2) 0%, rgba(41, 128, 185, 0.2) 100%);
             border: 1px solid rgba(52, 152, 219, 0.4);
             border-radius: 8px;
             color: #3498db;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
@@ -152,13 +214,12 @@ function createSidebar(): HTMLElement {
         <button 
           id="cortex-clear"
           style="
-            flex: 1;
-            padding: 10px 14px;
+            padding: 10px 12px;
             background: linear-gradient(135deg, rgba(231, 76, 60, 0.15) 0%, rgba(192, 57, 43, 0.15) 100%);
             border: 1px solid rgba(231, 76, 60, 0.3);
             border-radius: 8px;
             color: #e74c3c;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
@@ -166,7 +227,7 @@ function createSidebar(): HTMLElement {
           onmouseover="this.style.background='linear-gradient(135deg, rgba(231, 76, 60, 0.25) 0%, rgba(192, 57, 43, 0.25) 100%)'; this.style.transform='scale(1.02)'"
           onmouseout="this.style.background='linear-gradient(135deg, rgba(231, 76, 60, 0.15) 0%, rgba(192, 57, 43, 0.15) 100%)'; this.style.transform='scale(1)'"
         >
-          🗑️ Clear
+          🗑️
         </button>
       </div>
 
@@ -175,8 +236,6 @@ function createSidebar(): HTMLElement {
         padding: 0 20px; 
         flex: 1; 
         overflow-y: auto;
-        scrollbar-width: thin;
-        scrollbar-color: rgba(255,255,255,0.2) transparent;
       ">
         <div style="padding: 40px 20px; text-align: center; color: #95a5a6; font-size: 13px;">
           Loading conversations...
@@ -193,11 +252,11 @@ function createSidebar(): HTMLElement {
           margin-bottom: 10px;
         ">
           <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
-            ✅ DAY 3: PRETTIER MODE
+            ✅ DAY 4: PRO TIER
           </div>
         </div>
         <div style="color: #7f8c8d; font-size: 10px; text-align: center; font-weight: 500;">
-          v0.3.0 • Building in Public
+          v0.4.0 • Building in Public
         </div>
       </div>
     </div>
@@ -220,7 +279,7 @@ function createSidebar(): HTMLElement {
     });
 
     searchInput?.addEventListener('input', (e) => {
-      const query = (e.target as HTMLInputElement).value.toLowerCase();
+      const query = (e.target as HTMLInputElement).value;
       filterConversations(query);
     });
   }, 100);
@@ -240,7 +299,6 @@ async function loadConversations(): Promise<void> {
   const container = document.getElementById('cortex-conversations');
   if (!container) return;
 
-  // Show loading skeleton
   container.innerHTML = Array(5).fill(0).map(() => `
     <div class="cortex-skeleton" style="
       padding: 16px;
@@ -254,16 +312,19 @@ async function loadConversations(): Promise<void> {
     const scrapedConversations = await scraper.scrapeConversationList();
     
     if (scrapedConversations.length > 0) {
-      await db.saveConversations(scrapedConversations);
+      // Auto-generate smart tags
+      const tagged = smartTagger.processConversations(scrapedConversations);
+      await db.saveConversations(tagged);
     }
 
-    const conversations = await db.getAllConversations();
-    conversations.sort((a, b) => 
+    allConversations = await db.getAllConversations();
+    allConversations.sort((a, b) => 
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     );
 
-    displayConversations(conversations);
-    updateStatus(conversations.length);
+    renderTagFilter();
+    displayConversations(allConversations);
+    updateStatus(allConversations.length);
   } catch (error) {
     console.error('Failed to load conversations:', error);
     container.innerHTML = `
@@ -274,6 +335,56 @@ async function loadConversations(): Promise<void> {
   }
 }
 
+function renderTagFilter(): void {
+  const filterContainer = document.getElementById('cortex-tag-filter');
+  if (!filterContainer) return;
+
+  const allTags = smartTagger.getAllTags(allConversations);
+  
+  if (allTags.length === 0) {
+    filterContainer.style.display = 'none';
+    return;
+  }
+
+  filterContainer.style.display = 'flex';
+  filterContainer.innerHTML = allTags.map(tag => {
+    const colors = smartTagger.getTagColor(tag);
+    const isActive = selectedTag === tag;
+    
+    return `
+      <span 
+        class="cortex-tag ${isActive ? 'active' : ''}"
+        data-tag="${tag}"
+        style="
+          background: ${colors.bg};
+          color: ${colors.color};
+          border: 1px solid ${colors.border};
+        "
+      >
+        ${tag}
+      </span>
+    `;
+  }).join('');
+
+  // Add click handlers
+  filterContainer.querySelectorAll('.cortex-tag').forEach(tagEl => {
+    tagEl.addEventListener('click', () => {
+      const tag = tagEl.getAttribute('data-tag');
+      if (tag === selectedTag) {
+        // Deselect
+        selectedTag = null;
+        displayConversations(allConversations);
+      } else {
+        // Select tag
+        selectedTag = tag;
+        const filtered = smartTagger.filterByTag(allConversations, tag);
+        displayConversations(filtered);
+      }
+      renderTagFilter(); // Re-render to update active state
+    });
+  });
+}
+
 function displayConversations(conversations: Conversation[]): void {
   const container = document.getElementById('cortex-conversations');
   if (!container) return;
@@ -281,7 +392,7 @@ function displayConversations(conversations: Conversation[]): void {
   if (conversations.length === 0) {
     container.innerHTML = `
       <div style="padding: 40px 20px; text-align: center; color: #95a5a6; font-size: 13px;">
-        No conversations found
+        ${selectedTag ? `No conversations tagged "${selectedTag}"` : 'No conversations found'}
       </div>
     `;
     return;
@@ -290,6 +401,18 @@ function displayConversations(conversations: Conversation[]): void {
   container.innerHTML = conversations.map(conv => {
     const platformEmoji = conv.platform === 'claude' ? '🤖' : '💬';
     const messageCountDisplay = conv.messageCount > 0 ? conv.messageCount : '?';
+    
+    const tagsHTML = conv.tags && conv.tags.length > 0 
+      ? conv.tags.map(tag => {
+          const colors = smartTagger.getTagColor(tag);
+          return `<span class="cortex-tag" style="
+            background: ${colors.bg};
+            color: ${colors.color};
+            border: 1px solid ${colors.border};
+            cursor: default;
+          ">${tag}</span>`;
+        }).join('')
+      : '';
     
     return `
     <div 
@@ -328,6 +451,13 @@ function displayConversations(conversations: Conversation[]): void {
         </div>
         ${conv.isStarred ? '<span style="font-size: 14px;">⭐</span>' : ''}
       </div>
+
+      <!-- Tags -->
+      ${tagsHTML ? `
+        <div style="margin-bottom: 8px; display: flex; flex-wrap: wrap;">
+          ${tagsHTML}
+        </div>
+      ` : ''}
 
       <!-- Preview Text -->
       ${conv.preview ? `
@@ -373,20 +503,27 @@ function displayConversations(conversations: Conversation[]): void {
 }
 
 function filterConversations(query: string): void {
-  const cards = document.querySelectorAll('.cortex-conversation-card');
-  cards.forEach(card => {
-    const text = card.textContent?.toLowerCase() || '';
-    const matches = text.includes(query);
-    (card as HTMLElement).style.display = matches ? 'block' : 'none';
-  });
+  if (!query) {
+    displayConversations(selectedTag ? smartTagger.filterByTag(allConversations, selectedTag) : allConversations);
+    return;
+  }
+
+  // Use fuzzy search
+  const baseConversations = selectedTag 
+    ? smartTagger.filterByTag(allConversations, selectedTag)
+    : allConversations;
+    
+  const filtered = smartTagger.fuzzySearch(baseConversations, query);
+  displayConversations(filtered);
 }
 
 function updateStatus(count: number): void {
   const statusDiv = document.getElementById('cortex-status');
   if (statusDiv) {
+    const tagInfo = selectedTag ? ` • Filtered: ${selectedTag}` : '';
     statusDiv.innerHTML = `
       <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
-        ✅ ${count} CONVERSATIONS LOADED
+        ✅ ${count} CONVERSATIONS${tagInfo}
       </div>
     `;
   }
