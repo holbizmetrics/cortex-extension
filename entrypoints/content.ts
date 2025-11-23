@@ -1,4 +1,4 @@
-// entrypoints/content.ts - Day 4: SMARTER (Pro Tier)
+// entrypoints/content.ts - Day 5: FUNCTIONAL
 
 import { db } from '@/lib/db';
 import { scraper } from '@/lib/scraper';
@@ -47,11 +47,48 @@ function createSidebar(): HTMLElement {
       
       .cortex-conversation-card {
         transition: all 0.2s ease;
+        position: relative;
       }
       
       .cortex-conversation-card:hover {
         transform: translateX(4px);
         background: rgba(255,255,255,0.12) !important;
+      }
+      
+      .cortex-conversation-card:hover .cortex-card-actions {
+        opacity: 1;
+        pointer-events: all;
+      }
+      
+      .cortex-card-actions {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        display: flex;
+        gap: 4px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s;
+        z-index: 10;
+      }
+      
+      .cortex-action-btn {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        font-size: 12px;
+        transition: all 0.2s;
+        background: rgba(0,0,0,0.3);
+        backdrop-filter: blur(4px);
+      }
+      
+      .cortex-action-btn:hover {
+        transform: scale(1.1);
+        background: rgba(0,0,0,0.5);
       }
       
       .cortex-badge {
@@ -152,7 +189,7 @@ function createSidebar(): HTMLElement {
           ">PRO</span>
         </h1>
         <p style="margin: 0; font-size: 12px; color: #95a5a6; font-weight: 500;">
-          Smart tagging & advanced search
+          Click, star, export, and organize
         </p>
       </div>
 
@@ -212,6 +249,25 @@ function createSidebar(): HTMLElement {
           🔄 Refresh
         </button>
         <button 
+          id="cortex-export"
+          style="
+            flex: 1;
+            padding: 10px 12px;
+            background: linear-gradient(135deg, rgba(46, 204, 113, 0.2) 0%, rgba(39, 174, 96, 0.2) 100%);
+            border: 1px solid rgba(46, 204, 113, 0.4);
+            border-radius: 8px;
+            color: #2ecc71;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+          "
+          onmouseover="this.style.background='linear-gradient(135deg, rgba(46, 204, 113, 0.3) 0%, rgba(39, 174, 96, 0.3) 100%)'; this.style.transform='scale(1.02)'"
+          onmouseout="this.style.background='linear-gradient(135deg, rgba(46, 204, 113, 0.2) 0%, rgba(39, 174, 96, 0.2) 100%)'; this.style.transform='scale(1)'"
+        >
+          📥 Export
+        </button>
+        <button 
           id="cortex-clear"
           style="
             padding: 10px 12px;
@@ -252,11 +308,11 @@ function createSidebar(): HTMLElement {
           margin-bottom: 10px;
         ">
           <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
-            ✅ DAY 4: PRO TIER
+            ✅ DAY 5: FUNCTIONAL
           </div>
         </div>
         <div style="color: #7f8c8d; font-size: 10px; text-align: center; font-weight: 500;">
-          v0.4.0 • Building in Public
+          v0.5.0 • Building in Public
         </div>
       </div>
     </div>
@@ -264,11 +320,16 @@ function createSidebar(): HTMLElement {
 
   setTimeout(() => {
     const refreshBtn = document.getElementById('cortex-refresh');
+    const exportBtn = document.getElementById('cortex-export');
     const clearBtn = document.getElementById('cortex-clear');
     const searchInput = document.getElementById('cortex-search') as HTMLInputElement;
 
     refreshBtn?.addEventListener('click', async () => {
       await loadConversations();
+    });
+
+    exportBtn?.addEventListener('click', () => {
+      exportAllConversations();
     });
 
     clearBtn?.addEventListener('click', async () => {
@@ -312,7 +373,6 @@ async function loadConversations(): Promise<void> {
     const scrapedConversations = await scraper.scrapeConversationList();
     
     if (scrapedConversations.length > 0) {
-      // Auto-generate smart tags
       const tagged = smartTagger.processConversations(scrapedConversations);
       await db.saveConversations(tagged);
     }
@@ -366,21 +426,18 @@ function renderTagFilter(): void {
     `;
   }).join('');
 
-  // Add click handlers
   filterContainer.querySelectorAll('.cortex-tag').forEach(tagEl => {
     tagEl.addEventListener('click', () => {
       const tag = tagEl.getAttribute('data-tag');
       if (tag === selectedTag) {
-        // Deselect
         selectedTag = null;
         displayConversations(allConversations);
       } else {
-        // Select tag
         selectedTag = tag;
         const filtered = smartTagger.filterByTag(allConversations, tag);
         displayConversations(filtered);
       }
-      renderTagFilter(); // Re-render to update active state
+      renderTagFilter();
     });
   });
 }
@@ -401,6 +458,7 @@ function displayConversations(conversations: Conversation[]): void {
   container.innerHTML = conversations.map(conv => {
     const platformEmoji = conv.platform === 'claude' ? '🤖' : '💬';
     const messageCountDisplay = conv.messageCount > 0 ? conv.messageCount : '?';
+    const starIcon = conv.isStarred ? '⭐' : '☆';
     
     const tagsHTML = conv.tags && conv.tags.length > 0 
       ? conv.tags.map(tag => {
@@ -410,6 +468,7 @@ function displayConversations(conversations: Conversation[]): void {
             color: ${colors.color};
             border: 1px solid ${colors.border};
             cursor: default;
+            pointer-events: none;
           ">${tag}</span>`;
         }).join('')
       : '';
@@ -418,6 +477,7 @@ function displayConversations(conversations: Conversation[]): void {
     <div 
       class="cortex-conversation-card" 
       data-id="${conv.id}"
+      data-conv='${JSON.stringify(conv).replace(/'/g, "&apos;")}'
       style="
         padding: 14px 16px;
         margin-bottom: 10px;
@@ -428,6 +488,19 @@ function displayConversations(conversations: Conversation[]): void {
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       "
     >
+      <!-- Action Buttons -->
+      <div class="cortex-card-actions">
+        <div class="cortex-action-btn" data-action="star" title="Star">
+          ${starIcon}
+        </div>
+        <div class="cortex-action-btn" data-action="export" title="Export">
+          📥
+        </div>
+        <div class="cortex-action-btn" data-action="delete" title="Delete">
+          🗑️
+        </div>
+      </div>
+
       <!-- Header Row -->
       <div style="
         display: flex;
@@ -435,6 +508,7 @@ function displayConversations(conversations: Conversation[]): void {
         align-items: start;
         margin-bottom: 8px;
         gap: 8px;
+        padding-right: 80px;
       ">
         <div style="
           color: #ecf0f1;
@@ -449,7 +523,6 @@ function displayConversations(conversations: Conversation[]): void {
         ">
           ${platformEmoji} ${conv.title}
         </div>
-        ${conv.isStarred ? '<span style="font-size: 14px;">⭐</span>' : ''}
       </div>
 
       <!-- Tags -->
@@ -500,6 +573,122 @@ function displayConversations(conversations: Conversation[]): void {
       </div>
     </div>
   `}).join('');
+
+  // Add click handlers
+  container.querySelectorAll('.cortex-conversation-card').forEach(card => {
+    const conv = JSON.parse(card.getAttribute('data-conv') || '{}');
+    
+    // Click card to navigate
+    card.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.cortex-action-btn')) return; // Don't navigate if clicking action button
+      navigateToConversation(conv);
+    });
+
+    // Action buttons
+    card.querySelectorAll('.cortex-action-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const action = (btn as HTMLElement).getAttribute('data-action');
+        
+        switch (action) {
+          case 'star':
+            await toggleStar(conv);
+            break;
+          case 'export':
+            exportConversation(conv);
+            break;
+          case 'delete':
+            if (confirm(`Delete "${conv.title}" from Cortex?`)) {
+              await db.deleteConversation(conv.id);
+              await loadConversations();
+            }
+            break;
+        }
+      });
+    });
+  });
+}
+
+function navigateToConversation(conv: Conversation): void {
+  // Navigate to the conversation in Claude
+  const baseUrl = 'https://claude.ai/chat/';
+  window.location.href = baseUrl + conv.id;
+}
+
+async function toggleStar(conv: Conversation): Promise<void> {
+  conv.isStarred = !conv.isStarred;
+  await db.saveConversations([conv]);
+  await loadConversations();
+}
+
+function exportConversation(conv: Conversation): void {
+  const markdown = `# ${conv.title}
+
+**Platform:** ${conv.platform}  
+**Date:** ${new Date(conv.updatedAt).toLocaleDateString()}  
+**Tags:** ${conv.tags?.join(', ') || 'None'}  
+
+## Preview
+
+${conv.preview || 'No preview available'}
+
+---
+
+*Exported from Cortex - The brain for your AI conversations*
+`;
+
+  downloadFile(markdown, `${sanitizeFilename(conv.title)}.md`, 'text/markdown');
+}
+
+function exportAllConversations(): void {
+  const conversations = selectedTag 
+    ? smartTagger.filterByTag(allConversations, selectedTag)
+    : allConversations;
+
+  const markdown = conversations.map(conv => `
+# ${conv.title}
+
+**Platform:** ${conv.platform}  
+**Date:** ${new Date(conv.updatedAt).toLocaleDateString()}  
+**Tags:** ${conv.tags?.join(', ') || 'None'}  
+
+${conv.preview || 'No preview available'}
+
+---
+`).join('\n\n');
+
+  const header = `# Cortex Conversations Export
+
+**Total Conversations:** ${conversations.length}  
+**Export Date:** ${new Date().toLocaleDateString()}  
+${selectedTag ? `**Filtered by Tag:** ${selectedTag}` : ''}
+
+---
+
+`;
+
+  downloadFile(header + markdown, 'cortex-export.md', 'text/markdown');
+}
+
+function downloadFile(content: string, filename: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function sanitizeFilename(filename: string): string {
+  return filename
+    .replace(/[^a-z0-9]/gi, '-')
+    .replace(/-+/g, '-')
+    .toLowerCase()
+    .substring(0, 50);
 }
 
 function filterConversations(query: string): void {
@@ -508,7 +697,6 @@ function filterConversations(query: string): void {
     return;
   }
 
-  // Use fuzzy search
   const baseConversations = selectedTag 
     ? smartTagger.filterByTag(allConversations, selectedTag)
     : allConversations;
@@ -520,7 +708,7 @@ function filterConversations(query: string): void {
 function updateStatus(count: number): void {
   const statusDiv = document.getElementById('cortex-status');
   if (statusDiv) {
-    const tagInfo = selectedTag ? ` • Filtered: ${selectedTag}` : '';
+    const tagInfo = selectedTag ? ` • ${selectedTag}` : '';
     statusDiv.innerHTML = `
       <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
         ✅ ${count} CONVERSATIONS${tagInfo}
