@@ -1,4 +1,4 @@
-// entrypoints/content.ts - Day 5: FUNCTIONAL
+// entrypoints/content.ts - Day 6: POLISH (with collapse & sidebar control)
 
 import { db } from '@/lib/db';
 import { scraper } from '@/lib/scraper';
@@ -7,6 +7,9 @@ import type { Conversation } from '@/types/conversation';
 
 let allConversations: Conversation[] = [];
 let selectedTag: string | null = null;
+let selectedView: 'all' | 'starred' | 'archived' = 'all';
+let isCollapsed = false;
+let claudeSidebarHidden = true; // Default: hide Claude's sidebar
 
 export default defineContentScript({
   matches: ['*://claude.ai/*'],
@@ -19,6 +22,7 @@ export default defineContentScript({
     const sidebar = createSidebar();
     document.body.appendChild(sidebar);
 
+    toggleClaudeSidebar(claudeSidebarHidden);
     shiftMainContent();
     await loadConversations();
 
@@ -36,11 +40,28 @@ function waitForPageLoad(): Promise<void> {
   });
 }
 
+function toggleClaudeSidebar(hide: boolean): void {
+  // Find Claude's native sidebar
+  const claudeSidebar = document.querySelector('nav[class*="sidebar"], aside, div[class*="sidebar"]:not(#cortex-sidebar)');
+  
+  if (claudeSidebar && claudeSidebar instanceof HTMLElement) {
+    claudeSidebar.style.display = hide ? 'none' : '';
+  }
+}
+
 function createSidebar(): HTMLElement {
   const sidebar = document.createElement('div');
   sidebar.id = 'cortex-sidebar';
   sidebar.innerHTML = `
     <style>
+      #cortex-sidebar {
+        transition: transform 0.3s ease;
+      }
+      
+      #cortex-sidebar.collapsed {
+        transform: translateX(-320px);
+      }
+      
       #cortex-sidebar * {
         box-sizing: border-box;
       }
@@ -89,6 +110,29 @@ function createSidebar(): HTMLElement {
       .cortex-action-btn:hover {
         transform: scale(1.1);
         background: rgba(0,0,0,0.5);
+      }
+      
+      .cortex-view-btn {
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        color: #95a5a6;
+      }
+      
+      .cortex-view-btn:hover {
+        background: rgba(255,255,255,0.08);
+        color: #ecf0f1;
+      }
+      
+      .cortex-view-btn.active {
+        background: rgba(52, 152, 219, 0.2);
+        border-color: rgba(52, 152, 219, 0.4);
+        color: #3498db;
       }
       
       .cortex-badge {
@@ -151,6 +195,58 @@ function createSidebar(): HTMLElement {
       #cortex-conversations::-webkit-scrollbar-thumb:hover {
         background: rgba(255,255,255,0.3);
       }
+      
+      .cortex-empty-state {
+        padding: 60px 20px;
+        text-align: center;
+      }
+      
+      .cortex-empty-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.3;
+      }
+      
+      .cortex-empty-title {
+        color: #ecf0f1;
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      
+      .cortex-empty-text {
+        color: #95a5a6;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      
+      .cortex-toggle-btn {
+        position: fixed;
+        left: 330px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 32px;
+        height: 64px;
+        background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-left: none;
+        border-radius: 0 8px 8px 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        z-index: 9998;
+        transition: all 0.3s ease;
+        box-shadow: 2px 0 10px rgba(0,0,0,0.2);
+      }
+      
+      .cortex-toggle-btn:hover {
+        background: linear-gradient(135deg, #34495e 0%, #2c3e50 100%);
+      }
+      
+      .cortex-toggle-btn.collapsed {
+        left: 10px;
+      }
     </style>
     
     <div style="
@@ -167,34 +263,83 @@ function createSidebar(): HTMLElement {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     ">
       <!-- Header -->
-      <div style="padding: 24px 20px 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-        <h1 style="
-          margin: 0 0 6px 0; 
-          font-size: 22px; 
-          font-weight: 700; 
-          color: #fff; 
-          display: flex; 
-          align-items: center; 
-          gap: 10px;
-          letter-spacing: -0.5px;
-        ">
-          🧠 Cortex
-          <span style="
-            font-size: 10px;
-            padding: 2px 6px;
-            background: linear-gradient(135deg, #f39c12, #e67e22);
-            border-radius: 6px;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-          ">PRO</span>
-        </h1>
+      <div style="padding: 20px 20px 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+          <h1 style="
+            margin: 0; 
+            font-size: 22px; 
+            font-weight: 700; 
+            color: #fff; 
+            display: flex; 
+            align-items: center; 
+            gap: 10px;
+            letter-spacing: -0.5px;
+          ">
+            🧠 Cortex
+            <span style="
+              font-size: 10px;
+              padding: 2px 6px;
+              background: linear-gradient(135deg, #f39c12, #e67e22);
+              border-radius: 6px;
+              font-weight: 700;
+              letter-spacing: 0.5px;
+            ">PRO</span>
+          </h1>
+          <button
+            id="cortex-toggle-claude"
+            title="${claudeSidebarHidden ? 'Show Claude sidebar' : 'Hide Claude sidebar'}"
+            style="
+              width: 28px;
+              height: 28px;
+              border-radius: 6px;
+              background: rgba(255,255,255,0.1);
+              border: 1px solid rgba(255,255,255,0.2);
+              color: #fff;
+              cursor: pointer;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 14px;
+              transition: all 0.2s;
+            "
+            onmouseover="this.style.background='rgba(255,255,255,0.15)'"
+            onmouseout="this.style.background='rgba(255,255,255,0.1)'"
+          >
+            ${claudeSidebarHidden ? '👁️' : '🚫'}
+          </button>
+        </div>
         <p style="margin: 0; font-size: 12px; color: #95a5a6; font-weight: 500;">
-          Click, star, export, and organize
+          Organize, search, and never lose context
         </p>
       </div>
 
+      <!-- View Switcher -->
+      <div style="padding: 16px 20px 12px 20px; display: flex; gap: 6px;">
+        <button 
+          id="cortex-view-all" 
+          class="cortex-view-btn active"
+          data-view="all"
+        >
+          💬 All
+        </button>
+        <button 
+          id="cortex-view-starred" 
+          class="cortex-view-btn"
+          data-view="starred"
+        >
+          ⭐ Starred
+        </button>
+        <button 
+          id="cortex-view-archived" 
+          class="cortex-view-btn"
+          data-view="archived"
+        >
+          📦 Archived
+        </button>
+      </div>
+
       <!-- Search Bar -->
-      <div style="padding: 16px 20px 12px 20px;">
+      <div style="padding: 0 20px 12px 20px;">
         <div style="position: relative;">
           <input 
             id="cortex-search"
@@ -308,17 +453,58 @@ function createSidebar(): HTMLElement {
           margin-bottom: 10px;
         ">
           <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
-            ✅ DAY 5: FUNCTIONAL
+            ✅ DAY 6: POLISHED
           </div>
         </div>
         <div style="color: #7f8c8d; font-size: 10px; text-align: center; font-weight: 500;">
-          v0.5.0 • Building in Public
+          v0.6.0 • Building in Public
         </div>
       </div>
     </div>
   `;
 
+  // Create toggle button
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'cortex-toggle-btn';
+  toggleBtn.innerHTML = '◀';
+  toggleBtn.title = 'Toggle Cortex sidebar';
+  
+  toggleBtn.addEventListener('click', () => {
+    isCollapsed = !isCollapsed;
+    sidebar.classList.toggle('collapsed');
+    toggleBtn.classList.toggle('collapsed');
+    toggleBtn.innerHTML = isCollapsed ? '▶' : '◀';
+    shiftMainContent();
+  });
+
   setTimeout(() => {
+    document.body.appendChild(toggleBtn);
+  }, 100);
+
+  setTimeout(() => {
+    // Claude sidebar toggle
+    const toggleClaudeBtn = document.getElementById('cortex-toggle-claude');
+    toggleClaudeBtn?.addEventListener('click', () => {
+      claudeSidebarHidden = !claudeSidebarHidden;
+      toggleClaudeSidebar(claudeSidebarHidden);
+      toggleClaudeBtn.innerHTML = claudeSidebarHidden ? '👁️' : '🚫';
+      toggleClaudeBtn.title = claudeSidebarHidden ? 'Show Claude sidebar' : 'Hide Claude sidebar';
+    });
+
+    // View switcher
+    document.querySelectorAll('[data-view]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = (btn as HTMLElement).getAttribute('data-view') as typeof selectedView;
+        selectedView = view;
+        
+        document.querySelectorAll('.cortex-view-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        selectedTag = null;
+        displayCurrentView();
+      });
+    });
+
     const refreshBtn = document.getElementById('cortex-refresh');
     const exportBtn = document.getElementById('cortex-export');
     const clearBtn = document.getElementById('cortex-clear');
@@ -351,7 +537,7 @@ function createSidebar(): HTMLElement {
 function shiftMainContent(): void {
   const mainContent = document.querySelector('main, [class*="main"]');
   if (mainContent instanceof HTMLElement) {
-    mainContent.style.marginLeft = '320px';
+    mainContent.style.marginLeft = isCollapsed ? '0px' : '320px';
     mainContent.style.transition = 'margin-left 0.3s ease';
   }
 }
@@ -383,23 +569,61 @@ async function loadConversations(): Promise<void> {
     );
 
     renderTagFilter();
-    displayConversations(allConversations);
-    updateStatus(allConversations.length);
+    displayCurrentView();
   } catch (error) {
     console.error('Failed to load conversations:', error);
     container.innerHTML = `
-      <div style="padding: 40px 20px; text-align: center; color: #e74c3c; font-size: 13px;">
-        ⚠️ Failed to load conversations
+      <div class="cortex-empty-state">
+        <div class="cortex-empty-icon">⚠️</div>
+        <div class="cortex-empty-title">Failed to load</div>
+        <div class="cortex-empty-text">Could not load conversations. Please refresh.</div>
       </div>
     `;
   }
+}
+
+function displayCurrentView(): void {
+  let conversations = [...allConversations];
+
+  switch (selectedView) {
+    case 'starred':
+      conversations = conversations.filter(c => c.isStarred);
+      break;
+    case 'archived':
+      conversations = conversations.filter(c => c.isArchived);
+      break;
+    case 'all':
+      conversations = conversations.filter(c => !c.isArchived);
+      break;
+  }
+
+  if (selectedTag) {
+    conversations = smartTagger.filterByTag(conversations, selectedTag);
+  }
+
+  renderTagFilter();
+  displayConversations(conversations);
+  updateStatus(conversations.length);
 }
 
 function renderTagFilter(): void {
   const filterContainer = document.getElementById('cortex-tag-filter');
   if (!filterContainer) return;
 
-  const allTags = smartTagger.getAllTags(allConversations);
+  let viewConversations = [...allConversations];
+  switch (selectedView) {
+    case 'starred':
+      viewConversations = viewConversations.filter(c => c.isStarred);
+      break;
+    case 'archived':
+      viewConversations = viewConversations.filter(c => c.isArchived);
+      break;
+    case 'all':
+      viewConversations = viewConversations.filter(c => !c.isArchived);
+      break;
+  }
+
+  const allTags = smartTagger.getAllTags(viewConversations);
   
   if (allTags.length === 0) {
     filterContainer.style.display = 'none';
@@ -431,13 +655,10 @@ function renderTagFilter(): void {
       const tag = tagEl.getAttribute('data-tag');
       if (tag === selectedTag) {
         selectedTag = null;
-        displayConversations(allConversations);
       } else {
         selectedTag = tag;
-        const filtered = smartTagger.filterByTag(allConversations, tag);
-        displayConversations(filtered);
       }
-      renderTagFilter();
+      displayCurrentView();
     });
   });
 }
@@ -447,11 +668,7 @@ function displayConversations(conversations: Conversation[]): void {
   if (!container) return;
 
   if (conversations.length === 0) {
-    container.innerHTML = `
-      <div style="padding: 40px 20px; text-align: center; color: #95a5a6; font-size: 13px;">
-        ${selectedTag ? `No conversations tagged "${selectedTag}"` : 'No conversations found'}
-      </div>
-    `;
+    container.innerHTML = getEmptyState();
     return;
   }
 
@@ -459,6 +676,7 @@ function displayConversations(conversations: Conversation[]): void {
     const platformEmoji = conv.platform === 'claude' ? '🤖' : '💬';
     const messageCountDisplay = conv.messageCount > 0 ? conv.messageCount : '?';
     const starIcon = conv.isStarred ? '⭐' : '☆';
+    const archiveIcon = conv.isArchived ? '📦' : '📥';
     
     const tagsHTML = conv.tags && conv.tags.length > 0 
       ? conv.tags.map(tag => {
@@ -488,27 +706,28 @@ function displayConversations(conversations: Conversation[]): void {
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       "
     >
-      <!-- Action Buttons -->
       <div class="cortex-card-actions">
-        <div class="cortex-action-btn" data-action="star" title="Star">
+        <div class="cortex-action-btn" data-action="star" title="${conv.isStarred ? 'Unstar' : 'Star'}">
           ${starIcon}
         </div>
+        <div class="cortex-action-btn" data-action="archive" title="${conv.isArchived ? 'Unarchive' : 'Archive'}">
+          ${archiveIcon}
+        </div>
         <div class="cortex-action-btn" data-action="export" title="Export">
-          📥
+          📤
         </div>
         <div class="cortex-action-btn" data-action="delete" title="Delete">
           🗑️
         </div>
       </div>
 
-      <!-- Header Row -->
       <div style="
         display: flex;
         justify-content: space-between;
         align-items: start;
         margin-bottom: 8px;
         gap: 8px;
-        padding-right: 80px;
+        padding-right: 110px;
       ">
         <div style="
           color: #ecf0f1;
@@ -525,14 +744,12 @@ function displayConversations(conversations: Conversation[]): void {
         </div>
       </div>
 
-      <!-- Tags -->
       ${tagsHTML ? `
         <div style="margin-bottom: 8px; display: flex; flex-wrap: wrap;">
           ${tagsHTML}
         </div>
       ` : ''}
 
-      <!-- Preview Text -->
       ${conv.preview ? `
         <div style="
           color: #95a5a6;
@@ -548,7 +765,6 @@ function displayConversations(conversations: Conversation[]): void {
         </div>
       ` : ''}
 
-      <!-- Footer Row -->
       <div style="
         display: flex;
         justify-content: space-between;
@@ -574,18 +790,15 @@ function displayConversations(conversations: Conversation[]): void {
     </div>
   `}).join('');
 
-  // Add click handlers
   container.querySelectorAll('.cortex-conversation-card').forEach(card => {
     const conv = JSON.parse(card.getAttribute('data-conv') || '{}');
     
-    // Click card to navigate
     card.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
-      if (target.closest('.cortex-action-btn')) return; // Don't navigate if clicking action button
+      if (target.closest('.cortex-action-btn')) return;
       navigateToConversation(conv);
     });
 
-    // Action buttons
     card.querySelectorAll('.cortex-action-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -594,6 +807,9 @@ function displayConversations(conversations: Conversation[]): void {
         switch (action) {
           case 'star':
             await toggleStar(conv);
+            break;
+          case 'archive':
+            await toggleArchive(conv);
             break;
           case 'export':
             exportConversation(conv);
@@ -610,16 +826,91 @@ function displayConversations(conversations: Conversation[]): void {
   });
 }
 
+function getEmptyState(): string {
+  switch (selectedView) {
+    case 'starred':
+      return `
+        <div class="cortex-empty-state">
+          <div class="cortex-empty-icon">⭐</div>
+          <div class="cortex-empty-title">No starred conversations</div>
+          <div class="cortex-empty-text">Star conversations to keep them here for quick access.</div>
+        </div>
+      `;
+    case 'archived':
+      return `
+        <div class="cortex-empty-state">
+          <div class="cortex-empty-icon">📦</div>
+          <div class="cortex-empty-title">No archived conversations</div>
+          <div class="cortex-empty-text">Archive conversations you've completed to declutter your list.</div>
+        </div>
+      `;
+    default:
+      if (selectedTag) {
+        return `
+          <div class="cortex-empty-state">
+            <div class="cortex-empty-icon">🏷️</div>
+            <div class="cortex-empty-title">No conversations tagged "${selectedTag}"</div>
+            <div class="cortex-empty-text">Try a different tag or clear the filter.</div>
+          </div>
+        `;
+      }
+      return `
+        <div class="cortex-empty-state">
+          <div class="cortex-empty-icon">💬</div>
+          <div class="cortex-empty-title">No conversations found</div>
+          <div class="cortex-empty-text">Start a conversation in Claude and click Refresh.</div>
+        </div>
+      `;
+  }
+}
+
 function navigateToConversation(conv: Conversation): void {
-  // Navigate to the conversation in Claude
-  const baseUrl = 'https://claude.ai/chat/';
-  window.location.href = baseUrl + conv.id;
+  window.location.href = 'https://claude.ai/chat/' + conv.id;
 }
 
 async function toggleStar(conv: Conversation): Promise<void> {
   conv.isStarred = !conv.isStarred;
-  await db.saveConversations([conv]);
-  await loadConversations();
+  
+  // Update in database
+  const allConvs = await db.getAllConversations();
+  const targetConv = allConvs.find(c => c.id === conv.id);
+  if (targetConv) {
+    targetConv.isStarred = conv.isStarred;
+    await db.saveConversations([targetConv]);
+  }
+  
+  // Update local state
+  const localConv = allConversations.find(c => c.id === conv.id);
+  if (localConv) {
+    localConv.isStarred = conv.isStarred;
+  }
+  
+  displayCurrentView();
+}
+
+async function toggleArchive(conv: Conversation): Promise<void> {
+  conv.isArchived = !conv.isArchived;
+  if (conv.isArchived) {
+    conv.isStarred = false;
+  }
+  
+  // Update in database
+  const allConvs = await db.getAllConversations();
+  const targetConv = allConvs.find(c => c.id === conv.id);
+  if (targetConv) {
+    targetConv.isArchived = conv.isArchived;
+    targetConv.isStarred = conv.isStarred;
+    await db.saveConversations([targetConv]);
+  }
+  
+  // Update local state
+  const localConv = allConversations.find(c => c.id === conv.id);
+  if (localConv) {
+    localConv.isArchived = conv.isArchived;
+    localConv.isStarred = conv.isStarred;
+  }
+  
+  displayCurrentView();
 }
 
 function exportConversation(conv: Conversation): void {
@@ -628,6 +919,8 @@ function exportConversation(conv: Conversation): void {
 **Platform:** ${conv.platform}  
 **Date:** ${new Date(conv.updatedAt).toLocaleDateString()}  
 **Tags:** ${conv.tags?.join(', ') || 'None'}  
+**Starred:** ${conv.isStarred ? 'Yes' : 'No'}  
+**Archived:** ${conv.isArchived ? 'Yes' : 'No'}  
 
 ## Preview
 
@@ -635,16 +928,30 @@ ${conv.preview || 'No preview available'}
 
 ---
 
-*Exported from Cortex - The brain for your AI conversations*
+*Exported from Cortex v0.6.0*
 `;
 
   downloadFile(markdown, `${sanitizeFilename(conv.title)}.md`, 'text/markdown');
 }
 
 function exportAllConversations(): void {
-  const conversations = selectedTag 
-    ? smartTagger.filterByTag(allConversations, selectedTag)
-    : allConversations;
+  let conversations = [...allConversations];
+
+  switch (selectedView) {
+    case 'starred':
+      conversations = conversations.filter(c => c.isStarred);
+      break;
+    case 'archived':
+      conversations = conversations.filter(c => c.isArchived);
+      break;
+    case 'all':
+      conversations = conversations.filter(c => !c.isArchived);
+      break;
+  }
+
+  if (selectedTag) {
+    conversations = smartTagger.filterByTag(conversations, selectedTag);
+  }
 
   const markdown = conversations.map(conv => `
 # ${conv.title}
@@ -652,6 +959,7 @@ function exportAllConversations(): void {
 **Platform:** ${conv.platform}  
 **Date:** ${new Date(conv.updatedAt).toLocaleDateString()}  
 **Tags:** ${conv.tags?.join(', ') || 'None'}  
+**Starred:** ${conv.isStarred ? 'Yes' : 'No'}  
 
 ${conv.preview || 'No preview available'}
 
@@ -660,15 +968,16 @@ ${conv.preview || 'No preview available'}
 
   const header = `# Cortex Conversations Export
 
+**View:** ${selectedView}  
 **Total Conversations:** ${conversations.length}  
 **Export Date:** ${new Date().toLocaleDateString()}  
-${selectedTag ? `**Filtered by Tag:** ${selectedTag}` : ''}
+${selectedTag ? `**Tag Filter:** ${selectedTag}` : ''}
 
 ---
 
 `;
 
-  downloadFile(header + markdown, 'cortex-export.md', 'text/markdown');
+  downloadFile(header + markdown, `cortex-${selectedView}-export.md`, 'text/markdown');
 }
 
 function downloadFile(content: string, filename: string, mimeType: string): void {
@@ -693,13 +1002,27 @@ function sanitizeFilename(filename: string): string {
 
 function filterConversations(query: string): void {
   if (!query) {
-    displayConversations(selectedTag ? smartTagger.filterByTag(allConversations, selectedTag) : allConversations);
+    displayCurrentView();
     return;
   }
 
-  const baseConversations = selectedTag 
-    ? smartTagger.filterByTag(allConversations, selectedTag)
-    : allConversations;
+  let baseConversations = [...allConversations];
+
+  switch (selectedView) {
+    case 'starred':
+      baseConversations = baseConversations.filter(c => c.isStarred);
+      break;
+    case 'archived':
+      baseConversations = baseConversations.filter(c => c.isArchived);
+      break;
+    case 'all':
+      baseConversations = baseConversations.filter(c => !c.isArchived);
+      break;
+  }
+
+  if (selectedTag) {
+    baseConversations = smartTagger.filterByTag(baseConversations, selectedTag);
+  }
     
   const filtered = smartTagger.fuzzySearch(baseConversations, query);
   displayConversations(filtered);
@@ -708,10 +1031,11 @@ function filterConversations(query: string): void {
 function updateStatus(count: number): void {
   const statusDiv = document.getElementById('cortex-status');
   if (statusDiv) {
+    const viewLabel = selectedView === 'all' ? 'ACTIVE' : selectedView.toUpperCase();
     const tagInfo = selectedTag ? ` • ${selectedTag}` : '';
     statusDiv.innerHTML = `
       <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
-        ✅ ${count} CONVERSATIONS${tagInfo}
+        ✅ ${count} ${viewLabel}${tagInfo}
       </div>
     `;
   }
