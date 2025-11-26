@@ -120,19 +120,90 @@ async function checkPendingModal(): Promise<void> {
 async function navigateToConversationAndScrape(conv: Conversation): Promise<void> {
   // Check if we're already on this conversation
   const currentConvId = messageScraper.getConversationIdFromUrl();
+  console.log('🧠 Cortex: Current URL conv ID:', currentConvId, 'Target:', conv.id);
+  
   if (currentConvId === conv.id) {
     // Already here, just scrape and show
+    console.log('🧠 Cortex: Already on this conversation, scraping...');
     await scrapeCurrentMessages();
-    openPreviewModal(conv);
+    // Force show modal even if no messages (we just tried to scrape)
+    await showPreviewModalDirect(conv);
     return;
   }
   
   // Store the conversation ID so we open modal after page loads
   localStorage.setItem(PENDING_MODAL_KEY, conv.id);
-  console.log('🧠 Cortex: Navigating to conversation for scraping...');
+  console.log('🧠 Cortex: Navigating to conversation for scraping...', conv.id);
   
   // Navigate to the conversation
   window.location.href = 'https://claude.ai/chat/' + conv.id;
+}
+
+// Show modal directly without checking cache (used after scraping)
+async function showPreviewModalDirect(conv: Conversation): Promise<void> {
+  currentPreviewConversation = conv;
+  previewModalOpen = true;
+
+  const modal = document.getElementById('cortex-preview-modal');
+  const titleEl = document.getElementById('cortex-modal-title');
+  const metaEl = document.getElementById('cortex-modal-meta');
+  const bodyEl = document.getElementById('cortex-modal-body');
+  const tagsEl = document.getElementById('cortex-modal-tags');
+
+  if (!modal || !titleEl || !metaEl || !bodyEl || !tagsEl) return;
+
+  modal.classList.add('open');
+  titleEl.textContent = conv.title;
+  
+  const date = new Date(conv.updatedAt).toLocaleDateString('en-US', { 
+    month: 'short', 
+    day: 'numeric', 
+    year: 'numeric' 
+  });
+  
+  // Load messages
+  currentPreviewMessages = await db.getMessagesForConversation(conv.id);
+  
+  metaEl.innerHTML = `
+    <span>📅 ${date}</span>
+    <span>💬 ${currentPreviewMessages.length} messages</span>
+    ${conv.isStarred ? '<span>⭐ Starred</span>' : ''}
+  `;
+  
+  // Show tags
+  if (conv.tags && conv.tags.length > 0) {
+    tagsEl.innerHTML = conv.tags.map(tag => 
+      `<span style="
+        background: rgba(155, 89, 182, 0.2);
+        color: #9b59b6;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+      ">${tag}</span>`
+    ).join('');
+  } else {
+    tagsEl.innerHTML = '';
+  }
+
+  if (currentPreviewMessages.length === 0) {
+    bodyEl.innerHTML = `
+      <div class="cortex-no-messages">
+        <div class="cortex-no-messages-icon">📭</div>
+        <div class="cortex-no-messages-text">
+          <strong>No messages found</strong><br><br>
+          This conversation may be empty or messages couldn't be scraped.
+        </div>
+      </div>
+    `;
+  } else {
+    bodyEl.innerHTML = currentPreviewMessages.map(msg => `
+      <div class="cortex-message ${msg.role}">
+        <div class="cortex-message-role">${msg.role === 'user' ? '👤 You' : '🤖 Claude'}</div>
+        <div class="cortex-message-content">${escapeHtml(msg.content)}</div>
+      </div>
+    `).join('');
+  }
 }
 
 function toggleClaudeSidebar(hide: boolean): void {
@@ -397,8 +468,11 @@ function createPreviewModal(): void {
 }
 
 async function openPreviewModal(conv: Conversation): Promise<void> {
+  console.log('🧠 Cortex: Opening preview for', conv.id, conv.title);
+  
   // First check if we have messages cached
   const hasMessages = await db.hasMessagesForConversation(conv.id);
+  console.log('🧠 Cortex: Has messages cached?', hasMessages);
   
   if (!hasMessages) {
     // No messages - need to navigate and scrape first
