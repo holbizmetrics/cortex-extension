@@ -1,15 +1,22 @@
-// entrypoints/content.ts - Day 6: POLISH (with collapse & sidebar control)
+// entrypoints/content.ts - Day 7: FULL MESSAGE SCRAPING
 
 import { db } from '@/lib/db';
 import { scraper } from '@/lib/scraper';
+import { messageScraper } from '@/lib/message-scraper';
 import { smartTagger } from '@/lib/smart-tags';
 import type { Conversation } from '@/types/conversation';
+import type { Message } from '@/types/message';
+
+const PENDING_MODAL_KEY = 'cortex_pending_modal';
 
 let allConversations: Conversation[] = [];
 let selectedTag: string | null = null;
 let selectedView: 'all' | 'starred' | 'archived' = 'all';
 let isCollapsed = false;
-let claudeSidebarHidden = true; // Default: hide Claude's sidebar
+let claudeSidebarHidden = true;
+let previewModalOpen = false;
+let currentPreviewConversation: Conversation | null = null;
+let currentPreviewMessages: Message[] = [];
 
 export default defineContentScript({
   matches: ['*://claude.ai/*'],
@@ -22,9 +29,21 @@ export default defineContentScript({
     const sidebar = createSidebar();
     document.body.appendChild(sidebar);
 
+    createPreviewModal();
     toggleClaudeSidebar(claudeSidebarHidden);
     shiftMainContent();
     await loadConversations();
+
+    // Auto-scrape messages if on a conversation page
+    if (messageScraper.isOnConversationPage()) {
+      await scrapeCurrentMessages();
+      
+      // Check if we have a pending modal to open
+      await checkPendingModal();
+    }
+
+    // Watch for navigation changes
+    observeNavigation();
 
     console.log('🧠 Cortex: Ready');
   }
@@ -40,13 +59,495 @@ function waitForPageLoad(): Promise<void> {
   });
 }
 
+function observeNavigation(): void {
+  // Watch for URL changes (SPA navigation)
+  let lastUrl = window.location.href;
+  
+  const observer = new MutationObserver(async () => {
+    if (window.location.href !== lastUrl) {
+      lastUrl = window.location.href;
+      
+      // If navigated to a conversation, scrape its messages
+      if (messageScraper.isOnConversationPage()) {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for page to load
+        await scrapeCurrentMessages();
+      }
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+async function scrapeCurrentMessages(): Promise<void> {
+  console.log('🧠 Cortex: Scraping current conversation messages...');
+  
+  const loaded = await messageScraper.waitForMessages(5000);
+  if (!loaded) {
+    console.log('🧠 Cortex: No messages found to scrape');
+    return;
+  }
+
+  const messages = await messageScraper.scrapeCurrentConversation();
+  if (messages.length > 0) {
+    await db.saveMessages(messages);
+    console.log(`🧠 Cortex: Saved ${messages.length} messages`);
+  }
+}
+
+async function checkPendingModal(): Promise<void> {
+  const pendingConvId = localStorage.getItem(PENDING_MODAL_KEY);
+  if (!pendingConvId) return;
+  
+  // Clear the pending flag
+  localStorage.removeItem(PENDING_MODAL_KEY);
+  
+  // Check if we're on the right conversation page
+  const currentConvId = messageScraper.getConversationIdFromUrl();
+  if (currentConvId !== pendingConvId) {
+    console.log('🧠 Cortex: Pending modal ID does not match current page');
+    return;
+  }
+  
+  // Find the conversation in our list
+  const conv = allConversations.find(c => c.id === pendingConvId);
+  if (conv) {
+    console.log('🧠 Cortex: Opening pending modal for', conv.title);
+    // Small delay to ensure messages are saved
+    setTimeout(() => openPreviewModal(conv), 500);
+  }
+}
+
+async function navigateToConversationAndScrape(conv: Conversation): Promise<void> {
+  // Check if we're already on this conversation
+  const currentConvId = messageScraper.getConversationIdFromUrl();
+  if (currentConvId === conv.id) {
+    // Already here, just scrape and show
+    await scrapeCurrentMessages();
+    openPreviewModal(conv);
+    return;
+  }
+  
+  // Store the conversation ID so we open modal after page loads
+  localStorage.setItem(PENDING_MODAL_KEY, conv.id);
+  console.log('🧠 Cortex: Navigating to conversation for scraping...');
+  
+  // Navigate to the conversation
+  window.location.href = 'https://claude.ai/chat/' + conv.id;
+}
+
 function toggleClaudeSidebar(hide: boolean): void {
-  // Find Claude's native sidebar
   const claudeSidebar = document.querySelector('nav[class*="sidebar"], aside, div[class*="sidebar"]:not(#cortex-sidebar)');
   
   if (claudeSidebar && claudeSidebar instanceof HTMLElement) {
     claudeSidebar.style.display = hide ? 'none' : '';
   }
+}
+
+function createPreviewModal(): void {
+  const modal = document.createElement('div');
+  modal.id = 'cortex-preview-modal';
+  modal.innerHTML = `
+    <style>
+      #cortex-preview-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: 10001;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      
+      #cortex-preview-modal.open {
+        display: flex;
+      }
+      
+      .cortex-modal-backdrop {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+      }
+      
+      .cortex-modal-container {
+        position: relative;
+        margin: auto;
+        width: 90%;
+        max-width: 800px;
+        max-height: 90vh;
+        background: #1a1a2e;
+        border-radius: 16px;
+        box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      
+      .cortex-modal-header {
+        padding: 20px 24px;
+        background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+      }
+      
+      .cortex-modal-title {
+        color: #fff;
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 0 8px 0;
+        line-height: 1.3;
+      }
+      
+      .cortex-modal-meta {
+        color: #95a5a6;
+        font-size: 12px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      
+      .cortex-modal-close {
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        color: #fff;
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+      
+      .cortex-modal-close:hover {
+        background: rgba(255, 255, 255, 0.2);
+        transform: scale(1.05);
+      }
+      
+      .cortex-modal-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 24px;
+      }
+      
+      .cortex-message {
+        margin-bottom: 20px;
+        padding: 16px;
+        border-radius: 12px;
+        line-height: 1.6;
+      }
+      
+      .cortex-message.user {
+        background: linear-gradient(135deg, rgba(52, 152, 219, 0.15) 0%, rgba(41, 128, 185, 0.15) 100%);
+        border: 1px solid rgba(52, 152, 219, 0.3);
+        margin-left: 40px;
+      }
+      
+      .cortex-message.assistant {
+        background: linear-gradient(135deg, rgba(46, 204, 113, 0.1) 0%, rgba(39, 174, 96, 0.1) 100%);
+        border: 1px solid rgba(46, 204, 113, 0.2);
+        margin-right: 40px;
+      }
+      
+      .cortex-message-role {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+        letter-spacing: 0.5px;
+      }
+      
+      .cortex-message.user .cortex-message-role {
+        color: #3498db;
+      }
+      
+      .cortex-message.assistant .cortex-message-role {
+        color: #2ecc71;
+      }
+      
+      .cortex-message-content {
+        color: #ecf0f1;
+        font-size: 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      
+      .cortex-modal-footer {
+        padding: 16px 24px;
+        background: rgba(0, 0, 0, 0.2);
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      
+      .cortex-modal-actions {
+        display: flex;
+        gap: 8px;
+      }
+      
+      .cortex-modal-btn {
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+      }
+      
+      .cortex-modal-btn-primary {
+        background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+        color: #fff;
+      }
+      
+      .cortex-modal-btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(52, 152, 219, 0.4);
+      }
+      
+      .cortex-modal-btn-secondary {
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+      
+      .cortex-modal-btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.15);
+      }
+      
+      .cortex-no-messages {
+        text-align: center;
+        padding: 60px 20px;
+        color: #95a5a6;
+      }
+      
+      .cortex-no-messages-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.3;
+      }
+      
+      .cortex-no-messages-text {
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      
+      .cortex-loading-messages {
+        text-align: center;
+        padding: 40px;
+        color: #95a5a6;
+      }
+    </style>
+    
+    <div class="cortex-modal-backdrop" id="cortex-modal-backdrop"></div>
+    <div class="cortex-modal-container">
+      <div class="cortex-modal-header">
+        <div>
+          <h2 class="cortex-modal-title" id="cortex-modal-title">Conversation Title</h2>
+          <div class="cortex-modal-meta" id="cortex-modal-meta">
+            <span>📅 Nov 24, 2025</span>
+            <span>💬 12 messages</span>
+          </div>
+        </div>
+        <button class="cortex-modal-close" id="cortex-modal-close">✕</button>
+      </div>
+      
+      <div class="cortex-modal-body" id="cortex-modal-body">
+        <div class="cortex-loading-messages">Loading messages...</div>
+      </div>
+      
+      <div class="cortex-modal-footer">
+        <div class="cortex-modal-meta" id="cortex-modal-tags"></div>
+        <div class="cortex-modal-actions">
+          <button class="cortex-modal-btn cortex-modal-btn-secondary" id="cortex-modal-export">
+            📥 Export
+          </button>
+          <button class="cortex-modal-btn cortex-modal-btn-primary" id="cortex-modal-open">
+            🔗 Open in Claude
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  // Event listeners
+  document.getElementById('cortex-modal-backdrop')?.addEventListener('click', closePreviewModal);
+  document.getElementById('cortex-modal-close')?.addEventListener('click', closePreviewModal);
+  document.getElementById('cortex-modal-export')?.addEventListener('click', exportCurrentPreview);
+  document.getElementById('cortex-modal-open')?.addEventListener('click', openCurrentInClaude);
+
+  // Escape key to close
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && previewModalOpen) {
+      closePreviewModal();
+    }
+  });
+}
+
+async function openPreviewModal(conv: Conversation): Promise<void> {
+  // First check if we have messages cached
+  const hasMessages = await db.hasMessagesForConversation(conv.id);
+  
+  if (!hasMessages) {
+    // No messages - need to navigate and scrape first
+    console.log('🧠 Cortex: No messages cached, navigating to scrape...');
+    await navigateToConversationAndScrape(conv);
+    return;
+  }
+  
+  // We have messages - show the modal
+  currentPreviewConversation = conv;
+  previewModalOpen = true;
+
+  const modal = document.getElementById('cortex-preview-modal');
+  const titleEl = document.getElementById('cortex-modal-title');
+  const metaEl = document.getElementById('cortex-modal-meta');
+  const bodyEl = document.getElementById('cortex-modal-body');
+  const tagsEl = document.getElementById('cortex-modal-tags');
+
+  if (!modal || !titleEl || !metaEl || !bodyEl || !tagsEl) return;
+
+  modal.classList.add('open');
+  titleEl.textContent = conv.title;
+  
+  const date = new Date(conv.updatedAt).toLocaleDateString('en-US', { 
+    month: 'short', 
+    day: 'numeric', 
+    year: 'numeric' 
+  });
+  
+  metaEl.innerHTML = `
+    <span>📅 ${date}</span>
+    <span>💬 Loading...</span>
+  `;
+  
+  bodyEl.innerHTML = '<div class="cortex-loading-messages">Loading messages...</div>';
+  
+  // Show tags
+  if (conv.tags && conv.tags.length > 0) {
+    tagsEl.innerHTML = conv.tags.map(tag => 
+      `<span style="
+        background: rgba(155, 89, 182, 0.2);
+        color: #9b59b6;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+      ">${tag}</span>`
+    ).join('');
+  } else {
+    tagsEl.innerHTML = '';
+  }
+
+  // Load messages
+  currentPreviewMessages = await db.getMessagesForConversation(conv.id);
+  
+  metaEl.innerHTML = `
+    <span>📅 ${date}</span>
+    <span>💬 ${currentPreviewMessages.length} messages</span>
+    ${conv.isStarred ? '<span>⭐ Starred</span>' : ''}
+  `;
+
+  if (currentPreviewMessages.length === 0) {
+    bodyEl.innerHTML = `
+      <div class="cortex-no-messages">
+        <div class="cortex-no-messages-icon">📭</div>
+        <div class="cortex-no-messages-text">
+          <strong>No messages scraped yet</strong><br><br>
+          Open this conversation in Claude, then come back to see the full thread.
+        </div>
+      </div>
+    `;
+  } else {
+    bodyEl.innerHTML = currentPreviewMessages.map(msg => `
+      <div class="cortex-message ${msg.role}">
+        <div class="cortex-message-role">${msg.role === 'user' ? '👤 You' : '🤖 Claude'}</div>
+        <div class="cortex-message-content">${escapeHtml(msg.content)}</div>
+      </div>
+    `).join('');
+  }
+}
+
+function closePreviewModal(): void {
+  previewModalOpen = false;
+  // Don't clear these immediately - let openCurrentInClaude use them first
+  setTimeout(() => {
+    currentPreviewConversation = null;
+    currentPreviewMessages = [];
+  }, 100);
+  
+  const modal = document.getElementById('cortex-preview-modal');
+  if (modal) {
+    modal.classList.remove('open');
+  }
+}
+
+function exportCurrentPreview(): void {
+  if (!currentPreviewConversation) return;
+
+  const conv = currentPreviewConversation;
+  const messages = currentPreviewMessages;
+
+  let markdown = `# ${conv.title}
+
+**Platform:** ${conv.platform}  
+**Date:** ${new Date(conv.updatedAt).toLocaleDateString()}  
+**Tags:** ${conv.tags?.join(', ') || 'None'}  
+**Starred:** ${conv.isStarred ? 'Yes' : 'No'}  
+**Messages:** ${messages.length}
+
+---
+
+`;
+
+  if (messages.length > 0) {
+    markdown += messages.map(msg => {
+      const role = msg.role === 'user' ? '## 👤 You' : '## 🤖 Claude';
+      return `${role}\n\n${msg.content}\n`;
+    }).join('\n---\n\n');
+  } else {
+    markdown += '*No messages scraped yet. Open the conversation in Claude to capture the full thread.*\n';
+  }
+
+  markdown += `\n---\n\n*Exported from Cortex v0.7.0*`;
+
+  downloadFile(markdown, `${sanitizeFilename(conv.title)}.md`, 'text/markdown');
+}
+
+function openCurrentInClaude(): void {
+  if (!currentPreviewConversation) {
+    console.warn('No conversation to open');
+    return;
+  }
+  const convId = currentPreviewConversation.id;
+  console.log('🧠 Cortex: Opening conversation:', convId);
+  
+  // Close modal first (visually)
+  const modal = document.getElementById('cortex-preview-modal');
+  if (modal) {
+    modal.classList.remove('open');
+  }
+  
+  // Navigate immediately
+  window.location.href = 'https://claude.ai/chat/' + convId;
+}
+
+function escapeHtml(text: string): string {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 function createSidebar(): HTMLElement {
@@ -238,6 +739,7 @@ function createSidebar(): HTMLElement {
         z-index: 9998;
         transition: all 0.3s ease;
         box-shadow: 2px 0 10px rgba(0,0,0,0.2);
+        color: #fff;
       }
       
       .cortex-toggle-btn:hover {
@@ -246,6 +748,16 @@ function createSidebar(): HTMLElement {
       
       .cortex-toggle-btn.collapsed {
         left: 10px;
+      }
+      
+      .cortex-has-messages {
+        position: absolute;
+        bottom: 8px;
+        right: 8px;
+        width: 8px;
+        height: 8px;
+        background: #2ecc71;
+        border-radius: 50%;
       }
     </style>
     
@@ -309,7 +821,7 @@ function createSidebar(): HTMLElement {
           </button>
         </div>
         <p style="margin: 0; font-size: 12px; color: #95a5a6; font-weight: 500;">
-          Organize, search, and never lose context
+          Full message history + preview
         </p>
       </div>
 
@@ -369,7 +881,6 @@ function createSidebar(): HTMLElement {
         flex-wrap: wrap;
         gap: 4px;
       ">
-        <!-- Tags will be inserted here -->
       </div>
 
       <!-- Action Buttons -->
@@ -453,11 +964,11 @@ function createSidebar(): HTMLElement {
           margin-bottom: 10px;
         ">
           <div style="color: #2ecc71; font-size: 11px; font-weight: 600; text-align: center;">
-            ✅ DAY 6: POLISHED
+            ✅ DAY 7: MESSAGES
           </div>
         </div>
         <div style="color: #7f8c8d; font-size: 10px; text-align: center; font-weight: 500;">
-          v0.6.0 • Building in Public
+          v0.7.0 • Building in Public
         </div>
       </div>
     </div>
@@ -482,7 +993,6 @@ function createSidebar(): HTMLElement {
   }, 100);
 
   setTimeout(() => {
-    // Claude sidebar toggle
     const toggleClaudeBtn = document.getElementById('cortex-toggle-claude');
     toggleClaudeBtn?.addEventListener('click', () => {
       claudeSidebarHidden = !claudeSidebarHidden;
@@ -491,7 +1001,6 @@ function createSidebar(): HTMLElement {
       toggleClaudeBtn.title = claudeSidebarHidden ? 'Show Claude sidebar' : 'Hide Claude sidebar';
     });
 
-    // View switcher
     document.querySelectorAll('[data-view]').forEach(btn => {
       btn.addEventListener('click', () => {
         const view = (btn as HTMLElement).getAttribute('data-view') as typeof selectedView;
@@ -519,7 +1028,7 @@ function createSidebar(): HTMLElement {
     });
 
     clearBtn?.addEventListener('click', async () => {
-      if (confirm('Clear all stored conversations?')) {
+      if (confirm('Clear all stored conversations and messages?')) {
         await db.clearAll();
         await loadConversations();
       }
@@ -663,7 +1172,7 @@ function renderTagFilter(): void {
   });
 }
 
-function displayConversations(conversations: Conversation[]): void {
+async function displayConversations(conversations: Conversation[]): Promise<void> {
   const container = document.getElementById('cortex-conversations');
   if (!container) return;
 
@@ -672,11 +1181,18 @@ function displayConversations(conversations: Conversation[]): void {
     return;
   }
 
+  // Check which conversations have messages
+  const messageStatus = new Map<string, boolean>();
+  for (const conv of conversations) {
+    messageStatus.set(conv.id, await db.hasMessagesForConversation(conv.id));
+  }
+
   container.innerHTML = conversations.map(conv => {
     const platformEmoji = conv.platform === 'claude' ? '🤖' : '💬';
     const messageCountDisplay = conv.messageCount > 0 ? conv.messageCount : '?';
     const starIcon = conv.isStarred ? '⭐' : '☆';
     const archiveIcon = conv.isArchived ? '📦' : '📥';
+    const hasMessages = messageStatus.get(conv.id);
     
     const tagsHTML = conv.tags && conv.tags.length > 0 
       ? conv.tags.map(tag => {
@@ -706,7 +1222,12 @@ function displayConversations(conversations: Conversation[]): void {
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       "
     >
+      ${hasMessages ? '<div class="cortex-has-messages" title="Messages scraped"></div>' : ''}
+      
       <div class="cortex-card-actions">
+        <div class="cortex-action-btn" data-action="preview" title="Preview">
+          👁️
+        </div>
         <div class="cortex-action-btn" data-action="star" title="${conv.isStarred ? 'Unstar' : 'Star'}">
           ${starIcon}
         </div>
@@ -727,7 +1248,7 @@ function displayConversations(conversations: Conversation[]): void {
         align-items: start;
         margin-bottom: 8px;
         gap: 8px;
-        padding-right: 110px;
+        padding-right: 130px;
       ">
         <div style="
           color: #ecf0f1;
@@ -793,10 +1314,11 @@ function displayConversations(conversations: Conversation[]): void {
   container.querySelectorAll('.cortex-conversation-card').forEach(card => {
     const conv = JSON.parse(card.getAttribute('data-conv') || '{}');
     
+    // Click card to open preview (changed from navigate)
     card.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
       if (target.closest('.cortex-action-btn')) return;
-      navigateToConversation(conv);
+      openPreviewModal(conv);
     });
 
     card.querySelectorAll('.cortex-action-btn').forEach(btn => {
@@ -805,6 +1327,9 @@ function displayConversations(conversations: Conversation[]): void {
         const action = (btn as HTMLElement).getAttribute('data-action');
         
         switch (action) {
+          case 'preview':
+            openPreviewModal(conv);
+            break;
           case 'star':
             await toggleStar(conv);
             break;
@@ -812,7 +1337,7 @@ function displayConversations(conversations: Conversation[]): void {
             await toggleArchive(conv);
             break;
           case 'export':
-            exportConversation(conv);
+            await exportConversationWithMessages(conv);
             break;
           case 'delete':
             if (confirm(`Delete "${conv.title}" from Cortex?`)) {
@@ -864,14 +1389,9 @@ function getEmptyState(): string {
   }
 }
 
-function navigateToConversation(conv: Conversation): void {
-  window.location.href = 'https://claude.ai/chat/' + conv.id;
-}
-
 async function toggleStar(conv: Conversation): Promise<void> {
   conv.isStarred = !conv.isStarred;
   
-  // Update in database
   const allConvs = await db.getAllConversations();
   const targetConv = allConvs.find(c => c.id === conv.id);
   if (targetConv) {
@@ -879,7 +1399,6 @@ async function toggleStar(conv: Conversation): Promise<void> {
     await db.saveConversations([targetConv]);
   }
   
-  // Update local state
   const localConv = allConversations.find(c => c.id === conv.id);
   if (localConv) {
     localConv.isStarred = conv.isStarred;
@@ -894,7 +1413,6 @@ async function toggleArchive(conv: Conversation): Promise<void> {
     conv.isStarred = false;
   }
   
-  // Update in database
   const allConvs = await db.getAllConversations();
   const targetConv = allConvs.find(c => c.id === conv.id);
   if (targetConv) {
@@ -903,7 +1421,6 @@ async function toggleArchive(conv: Conversation): Promise<void> {
     await db.saveConversations([targetConv]);
   }
   
-  // Update local state
   const localConv = allConversations.find(c => c.id === conv.id);
   if (localConv) {
     localConv.isArchived = conv.isArchived;
@@ -913,23 +1430,32 @@ async function toggleArchive(conv: Conversation): Promise<void> {
   displayCurrentView();
 }
 
-function exportConversation(conv: Conversation): void {
-  const markdown = `# ${conv.title}
+async function exportConversationWithMessages(conv: Conversation): Promise<void> {
+  const messages = await db.getMessagesForConversation(conv.id);
+
+  let markdown = `# ${conv.title}
 
 **Platform:** ${conv.platform}  
 **Date:** ${new Date(conv.updatedAt).toLocaleDateString()}  
 **Tags:** ${conv.tags?.join(', ') || 'None'}  
 **Starred:** ${conv.isStarred ? 'Yes' : 'No'}  
 **Archived:** ${conv.isArchived ? 'Yes' : 'No'}  
-
-## Preview
-
-${conv.preview || 'No preview available'}
+**Messages:** ${messages.length}
 
 ---
 
-*Exported from Cortex v0.6.0*
 `;
+
+  if (messages.length > 0) {
+    markdown += messages.map(msg => {
+      const role = msg.role === 'user' ? '## 👤 You' : '## 🤖 Claude';
+      return `${role}\n\n${msg.content}\n`;
+    }).join('\n---\n\n');
+  } else {
+    markdown += `## Preview\n\n${conv.preview || 'No preview available'}\n\n*Full messages not yet scraped. Open the conversation in Claude to capture the complete thread.*\n`;
+  }
+
+  markdown += `\n---\n\n*Exported from Cortex v0.7.0*`;
 
   downloadFile(markdown, `${sanitizeFilename(conv.title)}.md`, 'text/markdown');
 }
